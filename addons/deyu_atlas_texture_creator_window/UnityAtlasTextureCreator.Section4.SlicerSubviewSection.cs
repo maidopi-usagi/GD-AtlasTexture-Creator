@@ -27,6 +27,7 @@ public partial class UnityAtlasTextureCreator
     [Export] private SpinBox NewAtlasTextureMarginWInput { get; set; }
     [Export] private SpinBox NewAtlasTextureMarginHInput { get; set; }
     [Export] private CheckBox FilterClip { get; set; }
+    [Export] private CheckBox MergeRects { get; set; }
 
     [Export, ExportSubgroup("Slicer Subview Section/SliceMode - CellSize")]
     private Control[] CellSizeGroup { get; set; }
@@ -305,69 +306,43 @@ public partial class UnityAtlasTextureCreator
     /// <summary>
     ///     Core method for Automatic Slice Calculation
     /// </summary>
-    private static void CalculateAutomaticSlice(Texture2D texture, IList<Rect2> sliceData)
+    private static void CalculateAutomaticSlice(Texture2D texture, IList<Rect2> sliceData, bool merge=true)
     {
         if (texture is null) return;
 
         sliceData.Clear();
 
-        var (textureWidth, textureHeight) = texture.GetSize();
+        var mask = new Bitmap();
+        mask.CreateFromImageAlpha(texture.GetImage());
+        
+        var maskRect = new Rect2I(Vector2I.Zero, mask.GetSize());
 
-        for (var y = 0; y < textureHeight; y++)
+        var polygons = mask.OpaqueToPolygons(maskRect, 0.0f);
+        
+        foreach (var polygon in polygons)
         {
-            for (var x = 0; x < textureWidth; x++)
+            var rect = new Rect2(polygon.First(), Vector2.Zero);
+            for (int i = 1; i < polygon.Length; i++)
             {
-                if (!IsPixelOpaqueImpl(texture, x, y)) continue;
-                var found = false;
-                foreach (var e in ListItemReference<Rect2>.CreateForEach(sliceData))
+                rect = rect.Expand(polygon[i]);
+            }
+
+            if (!merge)
+            {
+                sliceData.Add(rect);
+            }
+            else
+            {
+                var intersected = false;
+                for (var index = 0; index < sliceData.Count; index++)
                 {
-                    var grown = e.Value.Grow(1.5f);
-                    if (!grown.HasPoint(new(x, y))) continue;
-                    e.Value = e.Value.Expand(new(x, y));
-                    e.Value = e.Value.Expand(new(x + 1, y + 1));
-                    x = (int)(e.Value.Position.X + e.Value.Size.X - 1);
-                    var merged = true;
-                    while (merged)
-                    {
-                        merged = false;
-                        var queue_erase = false;
-                        for (var f = ListItemReference<Rect2>.CreateFor(sliceData); f.IsValid; f = f.GetNext())
-                        {
-                            if (queue_erase)
-                            {
-                                var prev = f.GetPrev();
-                                if (prev.IsValid) sliceData.Remove(prev.Value);
-                                queue_erase = false;
-                            }
-
-                            if (!f.IsValid || !e.IsValid) break;
-
-                            if (f.Value == e.Value) continue;
-
-                            if (!e.Value.Grow(1).Intersects(f.Value)) continue;
-                            e.Value = e.Value.Expand(f.Value.Position);
-                            e.Value = e.Value.Expand(f.Value.Position + f.Value.Size);
-                            var prevF = f.GetPrev();
-                            if (prevF.IsValid)
-                            {
-                                f = prevF;
-                                var nextF = f.GetNext();
-                                if (nextF.IsValid) sliceData.Remove(nextF.Value);
-                            }
-                            else queue_erase = true;
-
-                            // Can't delete the first rect in the list.
-                            merged = true;
-                        }
-                    }
-
-                    found = true;
+                    var existSlice = sliceData[index];
+                    if (!rect.Intersects(existSlice)) continue;
+                    sliceData[index] = existSlice.Merge(rect);
+                    intersected = true;
                     break;
                 }
-
-                if (found) continue;
-                var new_rect = new Rect2(x, y, 1, 1);
-                sliceData.Add(new_rect);
+                if (!intersected) sliceData.Add(rect);
             }
         }
     }
